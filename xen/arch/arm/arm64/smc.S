@@ -30,3 +30,46 @@ ENTRY(__arm_smccc_1_0_smc)
         stp     x2, x3, [x4, #SMCCC_RES_a2]
 1:
         ret
+
+
+/*
+ * void arm_smccc_1_2_smc(const struct arm_smccc_1_2_regs *args,
+ *                        struct arm_smccc_1_2_regs *res)
+ */
+ENTRY(arm_smccc_1_2_smc)
+    /* Save `res` and free a GPR that won't be clobbered */
+    stp     x1, x19, [sp, #-16]!
+
+    /* Ensure `args` won't be clobbered while loading regs in next step */
+    mov	x19, x0
+
+    /* Load the registers x0 - x17 from the struct arm_smccc_1_2_regs */
+    ldp	x0, x1, [x19, #0]
+    ldp	x2, x3, [x19, #16]
+    ldp	x4, x5, [x19, #32]
+    ldp	x6, x7, [x19, #48]
+    ldp	x8, x9, [x19, #64]
+    ldp	x10, x11, [x19, #80]
+    ldp	x12, x13, [x19, #96]
+    ldp	x14, x15, [x19, #112]
+    ldp	x16, x17, [x19, #128]
+
+    smc #0
+
+    /* Load the `res` from the stack */
+    ldr	x19, [sp]
+
+    /* Store the registers x0 - x17 into the result structure */
+    stp	x0, x1, [x19, #0]
+    stp	x2, x3, [x19, #16]
+    stp	x4, x5, [x19, #32]
+    stp	x6, x7, [x19, #48]
+    stp	x8, x9, [x19, #64]
+    stp	x10, x11, [x19, #80]
+    stp	x12, x13, [x19, #96]
+    stp	x14, x15, [x19, #112]
+    stp	x16, x17, [x19, #128]
+
+    /* Restore original x19 */
+    ldp     xzr, x19, [sp], #16
+    ret
