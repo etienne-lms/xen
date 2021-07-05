@@ -25,6 +25,7 @@
 #include <asm/cpufeature.h>
 #include <asm/current.h>
 #include <asm/event.h>
+#include <asm/ffa.h>
 #include <asm/gic.h>
 #include <asm/guest_access.h>
 #include <asm/guest_atomics.h>
@@ -737,6 +738,9 @@ int arch_domain_create(struct domain *d,
     if ( (rc = tee_domain_init(d, config->arch.tee_type)) != 0 )
         goto fail;
 
+    if ( (rc = ffa_domain_init(d)) != 0 )
+        goto fail;
+
     update_domain_wallclock_time(d);
 
     /*
@@ -974,6 +978,7 @@ static int relinquish_memory(struct domain *d, struct page_list_head *list)
  */
 enum {
     PROG_tee = 1,
+    PROG_ffa,
     PROG_xen,
     PROG_page,
     PROG_mapping,
@@ -1009,6 +1014,11 @@ int domain_relinquish_resources(struct domain *d)
 
     PROGRESS(tee):
         ret = tee_relinquish_resources(d);
+        if (ret )
+            return ret;
+
+    PROGRESS(ffa):
+        ret = ffa_relinquish_resources(d);
         if (ret )
             return ret;
 

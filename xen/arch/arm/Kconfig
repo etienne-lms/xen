@@ -114,6 +114,16 @@ config TEE
 
 source "arch/arm/tee/Kconfig"
 
+config FFA
+	bool "Enable FF-A mediator support" if EXPERT
+	default n
+	help
+	  This option enables a minamal FF-A mediator. The mediator is
+	  generic as it follows the FF-A specification [1], but it only
+	  implements a small substet of the specification.
+
+	  [1] https://developer.arm.com/documentation/den0077/latest
+
 endmenu
 
 menu "ARM errata workaround via the alternative framework"
