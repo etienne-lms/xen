@@ -123,6 +123,14 @@
 #define FFA_MEM_FRAG_TX			_AC(0x8400007B,U)
 #define FFA_SECONDARY_EP_REGISTER_64	_AC(0xC4000084,U)
 
+#define FFA_MSG_FLAG_FRAMEWORK		BIT(31, U)
+#define FFA_MSG_TYPE_MASK		_AC(0xFF,U);
+#define FFA_MSG_PSCI			_AC(0x0,U)
+#define FFA_MSG_SEND_VM_CREATED		_AC(0x4,U)
+#define FFA_MSG_RESP_VM_CREATED		_AC(0x5,U)
+#define FFA_MSG_SEND_VM_DESTROYED	_AC(0x6,U)
+#define FFA_MSG_RESP_VM_DESTROYED	_AC(0x7,U)
+
 /* Endpoint RX/TX descriptor */
 struct ffa_endpoint_rxtx_descriptor {
     uint16_t sender_id;
@@ -393,8 +401,6 @@ static uint32_t handle_rxtx_map(uint32_t fid, register_t tx_addr,
                                 register_t rx_addr, uint32_t page_count)
 {
     uint32_t ret = FFA_RET_NOT_SUPPORTED;
-    struct ffa_endpoint_rxtx_descriptor *descr;
-    struct ffa_address_range *addr_range;
     struct domain *d = current->domain;
     struct ffa_ctx *ctx = d->arch.ffa;
     struct page_info *tx_pg;
@@ -439,25 +445,6 @@ static uint32_t handle_rxtx_map(uint32_t fid, register_t tx_addr,
     if ( !rx )
         goto err_unmap_tx;
 
-    spin_lock(&ffa_buffer_lock);
-    descr = ffa_tx;
-    descr->sender_id = get_vm_id(d);
-    descr->reserved = 0;
-    descr->rx_range_count = 1;
-    descr->tx_range_count = 1;
-    addr_range = (struct ffa_address_range *)(descr + 1);
-    addr_range->address = __pa(tx);
-    addr_range->page_count = 1;
-    addr_range->reserved = 0;
-    addr_range++;
-    addr_range->address = __pa(rx);
-    addr_range->page_count = 1;
-    addr_range->reserved = 0;
-    ret = ffa_rxtx_map(0, 0, 0);
-    spin_unlock(&ffa_buffer_lock);
-    if ( ret )
-        goto err_unmap_rx;
-
     ctx->rx = rx;
     ctx->tx = tx;
     ctx->rx_pg = rx_pg;
@@ -466,8 +453,6 @@ static uint32_t handle_rxtx_map(uint32_t fid, register_t tx_addr,
     ctx->tx_is_mine = true;
     return FFA_RET_OK;
 
-err_unmap_rx:
-    unmap_domain_page_global(rx);
 err_unmap_tx:
     unmap_domain_page_global(tx);
 err_put_rx_pg:
@@ -986,6 +971,12 @@ bool ffa_handle_call(struct cpu_user_regs *regs, uint32_t fid)
 
 int ffa_domain_init(struct domain *d)
 {
+    const struct arm_smccc_1_2_regs arg = {
+        .a0 = FFA_MSG_SEND_DIRECT_REQ_32,
+        .a2 = FFA_MSG_FLAG_FRAMEWORK | FFA_MSG_SEND_VM_CREATED,
+	.a5 = get_vm_id(d),
+    };
+    struct arm_smccc_1_2_regs resp;
     struct ffa_ctx *ctx;
 
     if ( !ffa_version )
@@ -995,32 +986,38 @@ int ffa_domain_init(struct domain *d)
     if ( !ctx )
         return -ENOMEM;
 
+    arm_smccc_1_2_smc(&arg, &resp);
+    if (resp.a0 != FFA_MSG_SEND_DIRECT_RESP_32 ||
+        resp.a2 != (FFA_MSG_FLAG_FRAMEWORK | FFA_MSG_RESP_VM_CREATED) ||
+        resp.a3) {
+        XFREE(ctx);
+        return -ENOMEM;
+    }
+
     d->arch.ffa = ctx;
 
     return 0;
 }
 
 int ffa_relinquish_resources(struct domain *d)
-{
+{    const struct arm_smccc_1_2_regs arg = {
+        .a0 = FFA_MSG_SEND_DIRECT_REQ_32,
+        .a2 = FFA_MSG_FLAG_FRAMEWORK | FFA_MSG_SEND_VM_DESTROYED,
+	.a5 = get_vm_id(d),
+    };
+    struct arm_smccc_1_2_regs resp;
     struct ffa_ctx *ctx = d->arch.ffa;
-    uint32_t e;
 
     if ( !ctx )
         return 0;
 
-    if ( ctx->rx )
-    {
-        e = ffa_rxtx_unmap(get_vm_id(d));
-        if ( e )
-        {
-            printk(XENLOG_ERR "ffa: Failed to unmap rxtx for vm_id %u: "
-                              "error %d\n", get_vm_id(d), (int)e);
-            ASSERT(!e);
-        }
-        unmap_domain_page_global(ctx->rx);
-        unmap_domain_page_global(ctx->tx);
-        put_page(ctx->rx_pg);
-        put_page(ctx->tx_pg);
+    arm_smccc_1_2_smc(&arg, &resp);
+    if (resp.a0 != FFA_MSG_SEND_DIRECT_RESP_32 ||
+        resp.a2 != (FFA_MSG_FLAG_FRAMEWORK | FFA_MSG_RESP_VM_DESTROYED) ||
+        resp.a3) {
+        printk(XENLOG_ERR "ffa: Failed to report destruction of vm_id %u: "
+                          "a0 0x%lx, a2 0x%lx, a3 0x%lx\n",
+                          get_vm_id(d), resp.a0, resp.a2, resp.a3);
     }
 
     XFREE(d->arch.ffa);
